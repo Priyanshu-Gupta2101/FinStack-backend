@@ -28,7 +28,7 @@ app.config['JWT_ACCESS_TOKEN_EXPIRES'] = datetime.timedelta(hours=24)
 
 db = SQLAlchemy(app)
 jwt = JWTManager(app)
-CORS(app, origins=["http://localhost:4200"])
+CORS(app, origins=[os.environ.get('CORS_ORIGINS', '*')])
 
 
 class User(db.Model):
