@@ -12,7 +12,7 @@ from typing import Dict
 from flask import Flask, request, jsonify, g
 from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
-from flask_cors import CORS
+from flask_cors import CORS, cross_origin
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import func
 from marshmallow import Schema, fields, validate, ValidationError
@@ -28,7 +28,25 @@ app.config['JWT_ACCESS_TOKEN_EXPIRES'] = datetime.timedelta(hours=24)
 
 db = SQLAlchemy(app)
 jwt = JWTManager(app)
-CORS(app, origins=[os.environ.get('CORS_ORIGINS', '*')])
+
+# Updated CORS configuration to handle Angular preflight requests
+cors_origins = os.environ.get('CORS_ORIGIN', 'http://localhost:4200,http://127.0.0.1:4200,http://localhost:3000').split(',')
+CORS(app, 
+     origins=cors_origins,
+     methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+     allow_headers=['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With'],
+     supports_credentials=True
+)
+
+@app.before_request
+def handle_preflight():
+    if request.method == "OPTIONS":
+        response = jsonify({})
+        response.headers.add("Access-Control-Allow-Origin", request.headers.get('Origin', '*'))
+        response.headers.add('Access-Control-Allow-Headers', "Content-Type,Authorization,Accept,Origin,X-Requested-With")
+        response.headers.add('Access-Control-Allow-Methods', "GET,PUT,POST,DELETE,PATCH,OPTIONS")
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        return response
 
 
 class User(db.Model):
@@ -72,9 +90,9 @@ class Task(db.Model):
 
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     date_created = db.Column(db.DateTime, default=datetime.datetime.utcnow, nullable=False, index=True)
-    entity_name = db.Column(db.String(200), nullable=False, index=True)  # Customer name
+    entity_name = db.Column(db.String(200), nullable=False, index=True)
     task_type = db.Column(db.String(100), nullable=False, index=True)
-    task_time = db.Column(db.DateTime, nullable=False, index=True)  # When task should be done
+    task_time = db.Column(db.DateTime, nullable=False, index=True)
     contact_person_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=False, index=True)
     note = db.Column(db.Text, nullable=True)
     status = db.Column(db.String(20), default='open', nullable=False, index=True)
@@ -137,6 +155,9 @@ def validate_json_input(schema_class):
     def decorator(f):
         @wraps(f)
         def decorated_function(*args, **kwargs):
+            if request.method == 'OPTIONS':
+                return f(*args, **kwargs)
+                
             try:
                 data = request.get_json()
                 if not data:
@@ -180,10 +201,14 @@ def ratelimit_handler(e):
     return jsonify({'error': 'Rate limit exceeded', 'description': str(e.description)}), 429
 
 
-@app.route('/api/auth/register', methods=['POST'])
+@app.route('/api/auth/register', methods=['POST', 'OPTIONS'])
+@cross_origin()
 @validate_json_input(UserRegistrationSchema)
 def register():
     """Register a new user"""
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+        
     data = g.validated_data
 
     if User.query.filter((User.username == data['username']) | (User.email == data['email'])).first():
@@ -213,10 +238,14 @@ def register():
         return jsonify({'error': 'Failed to create user'}), 500
 
 
-@app.route('/api/auth/login', methods=['POST'])
+@app.route('/api/auth/login', methods=['POST', 'OPTIONS'])
+@cross_origin()
 @validate_json_input(UserLoginSchema)
 def login():
     """User login"""
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+        
     data = g.validated_data
 
     user = User.query.filter_by(username=data['username']).first()
@@ -232,10 +261,14 @@ def login():
     return jsonify({'error': 'Invalid credentials'}), 401
 
 
-@app.route('/api/auth/me', methods=['GET'])
+@app.route('/api/auth/me', methods=['GET', 'OPTIONS'])
+@cross_origin()
 @jwt_required()
 def get_current_user():
     """Get current user info"""
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+        
     user_id = get_jwt_identity()
     user = User.query.get(user_id)
 
@@ -245,21 +278,29 @@ def get_current_user():
     return jsonify({'user': user.to_dict()}), 200
 
 
-@app.route('/api/users', methods=['GET'])
+@app.route('/api/users', methods=['GET', 'OPTIONS'])
+@cross_origin()
 @jwt_required()
 def get_users():
     """Get all active users for task assignment"""
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+        
     users = User.query.filter_by(is_active=True).all()
     return jsonify({
         'users': [user.to_dict() for user in users]
     }), 200
 
 
-@app.route('/api/tasks', methods=['POST'])
+@app.route('/api/tasks', methods=['POST', 'OPTIONS'])
+@cross_origin()
 @jwt_required()
 @validate_json_input(TaskCreateSchema)
 def create_task():
     """Create a new task"""
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+        
     data = g.validated_data
     user_id = get_jwt_identity()
 
@@ -289,10 +330,14 @@ def create_task():
         return jsonify({'error': 'Failed to create task'}), 500
 
 
-@app.route('/api/tasks', methods=['GET'])
+@app.route('/api/tasks', methods=['GET', 'OPTIONS'])
+@cross_origin()
 @jwt_required()
 def get_tasks():
     """Get tasks with filtering and sorting"""
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+        
     status = request.args.get('status')
     task_type = request.args.get('task_type')
     entity_name = request.args.get('entity_name')
@@ -357,10 +402,14 @@ def get_tasks():
         return jsonify({'error': 'Failed to fetch tasks'}), 500
 
 
-@app.route('/api/tasks/<task_id>', methods=['GET'])
+@app.route('/api/tasks/<task_id>', methods=['GET', 'OPTIONS'])
+@cross_origin()
 @jwt_required()
 def get_task(task_id):
     """Get a specific task"""
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+        
     if not validate_uuid(task_id):
         return jsonify({'error': 'Invalid task ID format'}), 400
 
@@ -371,11 +420,15 @@ def get_task(task_id):
     return jsonify({'task': task.to_dict()}), 200
 
 
-@app.route('/api/tasks/<task_id>', methods=['PUT'])
+@app.route('/api/tasks/<task_id>', methods=['PUT', 'OPTIONS'])
+@cross_origin()
 @jwt_required()
 @validate_json_input(TaskUpdateSchema)
 def update_task(task_id):
     """Update a task"""
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+        
     if not validate_uuid(task_id):
         return jsonify({'error': 'Invalid task ID format'}), 400
 
@@ -406,10 +459,14 @@ def update_task(task_id):
         return jsonify({'error': 'Failed to update task'}), 500
 
 
-@app.route('/api/tasks/<task_id>/status', methods=['PATCH'])
+@app.route('/api/tasks/<task_id>/status', methods=['PATCH', 'OPTIONS'])
+@cross_origin()
 @jwt_required()
 def update_task_status(task_id):
     """Update task status only"""
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+        
     if not validate_uuid(task_id):
         return jsonify({'error': 'Invalid task ID format'}), 400
 
@@ -439,10 +496,14 @@ def update_task_status(task_id):
         return jsonify({'error': 'Failed to update task status'}), 500
 
 
-@app.route('/api/tasks/<task_id>', methods=['DELETE'])
+@app.route('/api/tasks/<task_id>', methods=['DELETE', 'OPTIONS'])
+@cross_origin()
 @jwt_required()
 def delete_task(task_id):
     """Delete a task"""
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+        
     if not validate_uuid(task_id):
         return jsonify({'error': 'Invalid task ID format'}), 400
 
@@ -460,10 +521,14 @@ def delete_task(task_id):
         return jsonify({'error': 'Failed to delete task'}), 500
 
 
-@app.route('/api/analytics/dashboard', methods=['GET'])
+@app.route('/api/analytics/dashboard', methods=['GET', 'OPTIONS'])
+@cross_origin()
 @jwt_required()
 def get_dashboard_analytics():
     """Get dashboard analytics"""
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+        
     try:
         total_tasks = Task.query.count()
         open_tasks = Task.query.filter_by(status='open').count()
@@ -493,9 +558,13 @@ def get_dashboard_analytics():
         return jsonify({'error': 'Failed to fetch analytics'}), 500
 
 
-@app.route('/api/health', methods=['GET'])
+@app.route('/api/health', methods=['GET', 'OPTIONS'])
+@cross_origin()
 def health_check():
     """Health check endpoint"""
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+        
     return jsonify({
         'status': 'healthy',
         'timestamp': datetime.datetime.utcnow().isoformat(),
@@ -503,11 +572,9 @@ def health_check():
     }), 200
 
 
-# Initialize database
 with app.app_context():
     db.create_all()
     
-    # Create default admin user if no users exist
     if not User.query.first():
         admin_user = User(
             username='admin',
